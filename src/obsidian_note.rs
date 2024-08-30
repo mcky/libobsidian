@@ -11,9 +11,33 @@ pub struct ObsidianNote {
 }
 
 impl ObsidianNote {
-    pub fn read_from_path(file_path: &PathBuf) -> anyhow::Result<ObsidianNote> {
+    pub fn read_from_path(file_path: &PathBuf) -> anyhow::Result<Self> {
         let file_contents = fs::read_to_string(file_path)?;
-        let note = parse_note(file_path, file_contents)?;
+        let note = Self::parse(file_path, file_contents)?;
+        Ok(note)
+    }
+
+    pub fn parse(file_path: &PathBuf, file_contents: String) -> anyhow::Result<Self> {
+        let (frontmatter_str, file_body) = extract_frontmatter(&file_contents);
+
+        let frontmatter = frontmatter_str
+            .map(|s| serde_yaml::from_str::<Properties>(&s))
+            .transpose()?
+            .and_then(|fm| {
+                if fm == serde_yaml::Value::Null {
+                    None
+                } else {
+                    Some(fm)
+                }
+            });
+
+        let note = Self {
+            file_path: file_path.clone(),
+            file_body: file_body.unwrap_or(String::new()),
+            file_contents,
+            properties: frontmatter,
+        };
+
         Ok(note)
     }
 }
@@ -32,56 +56,34 @@ fn extract_frontmatter(content: &str) -> (Option<String>, Option<String>) {
     }
 }
 
-pub fn parse_note(file_path: &PathBuf, file_contents: String) -> anyhow::Result<ObsidianNote> {
-    let (frontmatter_str, file_body) = extract_frontmatter(&file_contents);
-
-    let frontmatter = frontmatter_str
-        .map(|s| serde_yaml::from_str::<Properties>(&s))
-        .transpose()?
-        .and_then(|fm| {
-            if fm == serde_yaml::Value::Null {
-                None
-            } else {
-                Some(fm)
-            }
-        });
-
-    let note = ObsidianNote {
-        file_path: file_path.clone(),
-        file_body: file_body.unwrap_or(String::new()),
-        file_contents,
-        properties: frontmatter,
-    };
-
-    Ok(note)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use indoc::indoc;
 
     #[test]
-    fn parse_note_returns_body() {
+    fn parse_returns_body() {
         let note_content = indoc! {r"
             ---
             some-property: foo
             ---
             The note body
         "};
-        let note = parse_note(&PathBuf::from("a-note.md"), note_content.to_string()).unwrap();
+        let note =
+            ObsidianNote::parse(&PathBuf::from("a-note.md"), note_content.to_string()).unwrap();
 
         assert_eq!(note.file_body.trim(), "The note body");
     }
 
     #[test]
-    fn parse_note_returns_properties() {
+    fn parse_returns_properties() {
         let note_content = indoc! {r"
             ---
             some-property: foo
             ---
         "};
-        let note = parse_note(&PathBuf::from("a-note.md"), note_content.to_string()).unwrap();
+        let note =
+            ObsidianNote::parse(&PathBuf::from("a-note.md"), note_content.to_string()).unwrap();
 
         assert_eq!(
             note.properties,
@@ -96,26 +98,28 @@ mod tests {
     }
 
     #[test]
-    fn parse_note_handles_missing_frontmatter() {
+    fn parse_handles_missing_frontmatter() {
         let note =
-            parse_note(&PathBuf::from("a-note.md"), "The note contents".to_string()).unwrap();
+            ObsidianNote::parse(&PathBuf::from("a-note.md"), "The note contents".to_string())
+                .unwrap();
         assert_eq!(note.properties, None);
     }
 
     #[test]
-    fn parse_note_handles_empty_frontmatter() {
+    fn parse_handles_empty_frontmatter() {
         let note_content = indoc! {r"
             ---
             ---
             The note content
         "};
 
-        let note = parse_note(&PathBuf::from("a-note.md"), note_content.to_string()).unwrap();
+        let note =
+            ObsidianNote::parse(&PathBuf::from("a-note.md"), note_content.to_string()).unwrap();
         assert_eq!(note.properties, None);
     }
 
     #[test]
-    fn parse_note_handles_tables() {
+    fn parse_handles_tables() {
         // Markdown tables also contain `---`
         let note_content = indoc! {r"
             | Col1      | Col2      |
@@ -124,7 +128,8 @@ mod tests {
             | Row2 Col1 | Row2 Col2 |
         "};
 
-        let note = parse_note(&PathBuf::from("a-note.md"), note_content.to_string()).unwrap();
+        let note =
+            ObsidianNote::parse(&PathBuf::from("a-note.md"), note_content.to_string()).unwrap();
         assert_eq!(note.properties, None);
     }
 }
